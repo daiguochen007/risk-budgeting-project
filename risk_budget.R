@@ -65,6 +65,7 @@ sqrt(t(w0)%*%(cov%*%w0))
 
 
 #################### risk budget with general bounds [a,b], sum(x)=1
+#################### can get different solutions if start from different points
 cov<- matrix(c( 1.0,-0.9, 0.6,
                -0.9, 1.0,-0.2,
                 0.6,-0.2, 4.0),nrow=3)
@@ -172,7 +173,6 @@ while (rho >= 10^-6){
 }
 
 
-
 ################################## another test of sensitivity
 cov<- matrix(c( 1.0, 0.3, 0.2,
                 0.3, 1.5, 0.4,
@@ -183,5 +183,70 @@ w0<- c(0.324,0.36,0.316)
 #risk contribution of each asset
 w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)
 
+
+################################## max sharpe rb start from max-sharpe
+cov<- matrix(c( 1.0, 0.3, 0.2,
+                0.3, 1.5, 0.4,
+                0.2, 0.4, 4.0),nrow=3)
+# initial values
+w0<- rep(1/nrow(cov),nrow(cov))
+b<- c(0.2,0.3,0.5)
+w_lb<- rep(-3,nrow(cov))
+w_ub<- rep(3,nrow(cov))
+#expected return
+ret<- c(0.1, 0.2, 0.5)
+rf<- 0.01
+#func
+rb_weight3<- function(cov,rho,w_lb,w_ub,w0,ret,rf){
+  eval_f <- function(x) {
+    sigma<- sqrt(t(x)%*%cov%*%x)
+    return(sum((x*(cov%*%x) - as.numeric(t(x)%*%cov%*%x)*b)^2) - rho * (ret%*%x-rf)/sigma )
+  }
+  # Gradient
+  eval_grad_f <- function(x) {
+    e<- diag(length(x))
+    res<-0
+    temp<- x*(cov%*%x) - as.numeric(t(x)%*%cov%*%x)*b
+    for (i in 1:length(x)){
+      res<- res+2*temp[i]*(e[i,]%*%t(cov[i,])+t(e[i,]%*%t(cov[i,])))%*%x
+    }
+    sigma<- sqrt(t(x)%*%cov%*%x)
+    return(res - rho*(ret/sigma - as.numeric((ret%*%x-rf)/sigma^3) * cov%*%x ))
+  }
+  # equality constraint function
+  eval_g0 <- function(x) {
+    return(sum(x)-1)
+  }
+  # jacobian of equality constraint
+  eval_jac_g0 <- function(x) {
+    return(rep(1,length(x)))
+  }
+  # solve fortfolio function
+  res <- nloptr( x0=w0,
+                 eval_f=eval_f,
+                 eval_grad_f=eval_grad_f,
+                 eval_g_eq=eval_g0,
+                 eval_jac_g_eq=eval_jac_g0,
+                 lb = w_lb,
+                 ub = w_ub,
+                 opts=list("algorithm"="NLOPT_LD_SLSQP","xtol_rel"=1.0e-8))
+  #solution
+  return(res$solution)
+}
+
+rho<-1000
+beta<-0.6
+while (rho >= 10^-6){
+  rho<- rho*beta
+  w0<- rb_weight3(cov,rho,w_lb,w_ub,w0,ret,rf)
+  print(w0)
+}
+
+#risk contribution of each asset
+w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)
+#volatility
+sqrt(t(w0)%*%(cov%*%w0))
+#sharpe
+(ret%*%x-rf)/sqrt(t(x)%*%cov%*%x)
 
 

@@ -37,14 +37,24 @@ rb_c_weight<- function(cov,rho,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
   }
   # inequality constraint function
   eval_g1 <- function(x) {
-    sigma<- as.numeric(sqrt(t(x)%*%cov%*%x))
-    return(rw_lb-x*(cov%*%x)/sigma)
+    var<- as.numeric(t(x)%*%cov%*%x)
+    return(c(rw_lb - x*(cov%*%x)/var,x*(cov%*%x)/var - rw_ub))
   }
   # jacobian of inequality constraint
   eval_jac_g1 <- function(x) {
-    #
+    #return n*n matrix
+    #x<-w0
     var<- as.numeric(t(x)%*%cov%*%x)
-    return((cov%*%x+diag(cov)*x)/var-2*x*(cov%*%x)*(cov%*%x)/var^2)
+    #i= 1~length(x)
+    mat=NULL
+    for (i in 1:length(x)){
+      vec1<- cov[i,]*x[i]
+      vec1[i]<- vec1[i]+(cov%*%x)[i]
+      vec1<- vec1/var
+      vec1<- t(vec1 - 2*x[i]*(cov%*%x)[i]/var^2 * (cov%*%x))
+      mat= rbind(mat,vec1)
+    }
+    return(rbind(-mat,mat))
   }
   # solve fortfolio function
   res <- nloptr( x0=w0,
@@ -56,12 +66,21 @@ rb_c_weight<- function(cov,rho,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
                  eval_jac_g_ineq = eval_jac_g1,
                  lb = w_lb,
                  ub = w_ub,
-                 opts=list("algorithm"="NLOPT_LD_MMA","xtol_rel"=1.0e-8))
+                 opts=list("algorithm"="NLOPT_LD_SLSQP","xtol_rel"=1.0e-8))
   #solution
   return(res$solution)
 }
 
 w0<- rb_c_weight(cov,rho,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf)
+
+#risk contribution of each asset
+w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)
+#volatility
+sqrt(t(w0)%*%(cov%*%w0))
+#sharpe
+(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0)
+
+
 
 
 

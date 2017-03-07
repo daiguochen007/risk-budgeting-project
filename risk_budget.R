@@ -247,6 +247,6 @@ w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)
 #volatility
 sqrt(t(w0)%*%(cov%*%w0))
 #sharpe
-(ret%*%x-rf)/sqrt(t(x)%*%cov%*%x)
+(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0)
 
 

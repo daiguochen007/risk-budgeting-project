@@ -94,12 +94,20 @@ optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
 }
 
 # get return from price
-ret_xts<- function(data){
-  for (i in 1:ncol(data)){
-    data[,i]<- data[,i]/lag(data[,i])-1
+ret_xts<- function(data,log=FALSE){
+  if (log==FALSE){
+    for (i in 1:ncol(data)){
+      data[,i]<- data[,i]/lag(data[,i])-1
+    }
+    data[is.na(data)]<- 0
+    return(data)
+  }else{
+    for (i in 1:ncol(data)){
+      data[,i]<- log(data[,i]/lag(data[,i]))
+    }
+    data[is.na(data)]<- 0
+    return(data)
   }
-  data[is.na(data)]<- 0
-  return(data)
 }
 
 # get average risk free rate within a period
@@ -116,8 +124,8 @@ get_perf<- function(xts_df,rf_ts){
     mat<- matrix(NA,length(id),1)
     rownames(mat)<-id
     colnames(mat)<- colnames(vec)
-    mat[1,1]<- as.numeric((vec[length(vec)]^(1/length(vec))-1)*252)
-    mat[2,1]<- sd(vec)*sqrt(252/length(vec))
+    mat[1,1]<- sum(ret_xts(vec,log=T))*252/length(vec)
+    mat[2,1]<- sd(ret_xts(vec,log=T))*sqrt(252)
     mat[3,1]<- (mat[1,1] - get_rf(index(vec)[1],index(vec)[length(vec)]))/mat[2,1]
     
     v_max<- 0
@@ -185,9 +193,11 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     #get insam rf rate
     rf<- get_rf(index(all_data[insam_index_list[j,1],]),index(all_data[insam_index_list[j,2],]))
     #geo insam ret
-    ret<- ((as.vector(insam_data[nrow(insam_data),])/as.vector(insam_data[1,]))^(1/nrow(insam_data))-1)*252
-    cov<- cov(insam_data)/nrow(insam_data)*252     
-    #result will become bad with cov of ret
+    #ret<- ((as.vector(insam_data[nrow(insam_data),])/as.vector(insam_data[1,]))^(1/nrow(insam_data))-1)*252
+    # log ret
+    ret<- apply(ret_xts(insam_data,log = T),2,mean)*252
+    
+    cov<- cov(ret_xts(insam_data,log = T))*252
     #pheatmap(cov,cluster_rows = F,cluster_cols = F)
     
     ###------------------------------------optimizing module-#
@@ -201,22 +211,21 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     #insam sharp ratio ts
     insam_sharpe_ts<- c(insam_sharpe_ts,(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0))
     #avg insam benchmrk sharp ratio ts
-    avg_insam_sharpe_ts<- c(avg_insam_sharpe_ts,(as.numeric(insam_benchmrk[length(insam_benchmrk)])/as.numeric(insam_benchmrk[1])-1-rf)/(sd(insam_benchmrk)*sqrt(252/length(insam_benchmrk))))
-    
+    avg_insam_sharpe_ts<- c(avg_insam_sharpe_ts,(sum(ret_xts(insam_benchmrk,log = T))-rf)/(sd(ret_xts(insam_benchmrk,log = T))*sqrt(252)))
     
     ############################################# outsample data
     #seperate time period
     outsam_data<- all_data[outsam_index_list[j,1]:outsam_index_list[j,2],]
     outsam_benchmrk<- avg_port[outsam_index_list[j,1]:outsam_index_list[j,2],]
     #outsam risk contribution ts
-    cov<- cov(outsam_data)/nrow(outsam_data)*252   
+    cov<- cov(ret_xts(outsam_data,log = T))*252 
     outsamRC_ts<- rbind(outsamRC_ts, t(w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)))
     #outsam sharp ratio ts
     rf<- get_rf(index(all_data[outsam_index_list[j,1],]),index(all_data[outsam_index_list[j,2],]))
     ret<- ((as.vector(outsam_data[nrow(outsam_data),])/as.vector(outsam_data[1,]))^(1/nrow(outsam_data))-1)*252
     outsam_sharpe_ts<- c(outsam_sharpe_ts,(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0))
     #avg outsam benchmrk sharp ratio ts
-    avg_outsam_sharpe_ts<- c(avg_outsam_sharpe_ts,(as.numeric(outsam_benchmrk[length(outsam_benchmrk)])/as.numeric(outsam_benchmrk[1])-1-rf)/(sd(outsam_benchmrk)*sqrt(252/length(outsam_benchmrk))))
+    avg_outsam_sharpe_ts<- c(avg_outsam_sharpe_ts,(sum(ret_xts(outsam_benchmrk,log = T))-rf)/(sd(ret_xts(outsam_benchmrk,log = T))*sqrt(252)))
     
     #insam portfolio performance
     in_perf<- xts(cumprod(as.matrix(ret_xts(insam_data))%*%w0+1),order.by = index(insam_data))
@@ -273,7 +282,6 @@ show_result<- function(res, rf_ts){
   print(autoplot(res$outsamRC_ts,facets = F,main="time series of outsample risk contribution"))
   print(autoplot(res$in_result, facets = F,main="time series of insample overall performance"))
   print(autoplot(res$out_result, facets = F,main="time series of outsample overall performance"))
-  
   print(autoplot(res$sharpe[,1:2],facets = F,main="time series of insample sharpe ratio"))
   print(autoplot(res$sharpe[,3:4],facets = F,main="time series of outsample sharpe ratio"))
   
@@ -315,9 +323,5 @@ rw_ub<- rep(0.5,ncol(all_data))
 ############################################ run
 res<- rb_back_test(all_data,start_date,end_date,insam_length,outsam_length,w_lb,w_ub,rw_lb,rw_ub,rf_ts)
 show_result(res)
-
-
-
-
 
 

@@ -1,5 +1,5 @@
 library('nloptr')
-library(plot3D)
+library(rgl)
 
 optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
   rb_c_weight2<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
@@ -73,33 +73,59 @@ optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
 
 cov<- matrix(c( 1.0, 0.3,
                 0.3, 1.5),nrow=2)
-# initial values
-w0<- rep(1/nrow(cov),nrow(cov))
-# weight bounds
-w_lb<- rep(-3,nrow(cov))
-w_ub<- rep(3,nrow(cov))
-# risk weight bounds
-rw_lb<- rep(0.15,nrow(cov))
-rw_ub<- rep(0.6,nrow(cov))
-#expected return
-ret<- c(0.1, 0.2)
-rf<- 0.01
-
-optimal_weight_rb(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf)
-
-x1<- seq(w_lb[1],w_ub[1],length.out = 100)
-x2<- seq(w_lb[1],w_ub[1],length.out = 100)
-
-f<-function(x1,x2){
-  sharpe<- (ret%*%c(x1,x2)-rf)/sqrt(t(c(x1,x2))%*%cov%*%c(x1,x2))
+#2-d x1 x2
+plot_sharpe<- function(cov,min,max){
+    
+  # initial values
+  w0<- rep(1/nrow(cov),nrow(cov))
+  # weight bounds
+  w_lb<- rep(min,nrow(cov))
+  w_ub<- rep(max,nrow(cov))
+  # risk weight bounds
+  rw_lb<- rep(0.2,nrow(cov))
+  rw_ub<- rep(0.8,nrow(cov))
+  #expected return
+  ret<- c(0.1, 0.2)
+  rf<- 0.01
   
-  return(sharpe)
+  x1<- seq(w_lb[1],w_ub[1],length.out = 100)
+  x2<- seq(w_lb[1],w_ub[1],length.out = 100)
+  
+  f<-function(x1,x2){
+    sharpe<- (ret%*%c(x1,x2)-rf)/sqrt(t(c(x1,x2))%*%cov%*%c(x1,x2))
+    return(sharpe)
+  }
+  
+  mat<- matrix(nrow = length(x1),ncol = length(x2))
+  for (i in 1:length(x1)){
+    for (j in 1:length(x2))
+      {mat[i,j] <- f(x1[i],x2[j])}
+  }
+  mat[is.infinite(mat)]<- 2*min(mat[is.finite(mat)])
+  
+  getmax<- function(mat){
+    for (i in 1:length(x1)){
+      for (j in 1:length(x2)){
+          if(mat[i,j]==max(mat)){
+            return(c(i,j))
+          }
+        }
+    }
+  }
+  
+  p_max<- list(x1.max=x1[getmax(mat)[1]],x2.max=x2[getmax(mat)[2]])
+  print(p_max)
+  plot3d(p_max[[1]],p_max[[2]],max(mat),col="red",size=5)
+  surface3d(x1,x2,mat,col="grey")
 }
 
-mat<- matrix(nrow = length(x1),ncol = length(x2))
+plot_sharpe(cov,0,8)
+
+#2-d    x1+x2=1
+y= NULL
 for (i in 1:length(x1)){
-  for (j in 1:length(x2))
-    mat[i,j] <- f(x1[i],x2[j])
+   y <- c(y,f(x1[i],1-x1[i]))
 }
+plot(x1,y,type="l",ylab="sharp ratio")
 
-persp3D(x1,x2,mat)
+

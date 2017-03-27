@@ -65,17 +65,28 @@ optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
     dy_rw_lb<- dy_rw_lb + (rw_lb - rep(-1,nrow(cov)))/num
     dy_rw_ub<- dy_rw_ub + (rw_ub - rep(1,nrow(cov)))/num
     w0<- rb_c_weight2(cov,w_lb,w_ub,dy_rw_lb,dy_rw_ub,w0,ret,rf)
-    print(w0)
+    #print(w0)
   }
   ###------------------------------------------------------#
   return(w0)
 }
 
-cov<- matrix(c( 1.0, 0.3,
-                0.3, 1.5),nrow=2)
+f<-function(w,type="sharpe"){
+  sharpe<- (ret%*%w-rf)/sqrt(t(w)%*%cov%*%w)
+  RC<-w*(cov%*%w)/as.numeric(t(w)%*%cov%*%w)
+  if(type=="sharpe"){return(sharpe)}
+  if(type=="RC1"){return(RC[1])}
+  if(type=="RC2"){return(RC[2])}
+  if(type=="RC3"){return(RC[3])}
+}
+
+################################################### 2D
+cov<- matrix(c( 0.02, 0.01,
+                0.01, 0.05),nrow=2)
+ret<- c(0.1, 0.2)
+rf<- 0.01
 #2-d x1 x2
-plot_sharpe<- function(cov,min,max){
-    
+plot_2d<- function(min,max,type="sharpe"){
   # initial values
   w0<- rep(1/nrow(cov),nrow(cov))
   # weight bounds
@@ -84,22 +95,14 @@ plot_sharpe<- function(cov,min,max){
   # risk weight bounds
   rw_lb<- rep(0.2,nrow(cov))
   rw_ub<- rep(0.8,nrow(cov))
-  #expected return
-  ret<- c(0.1, 0.2)
-  rf<- 0.01
   
   x1<- seq(w_lb[1],w_ub[1],length.out = 100)
   x2<- seq(w_lb[1],w_ub[1],length.out = 100)
   
-  f<-function(x1,x2){
-    sharpe<- (ret%*%c(x1,x2)-rf)/sqrt(t(c(x1,x2))%*%cov%*%c(x1,x2))
-    return(sharpe)
-  }
-  
   mat<- matrix(nrow = length(x1),ncol = length(x2))
   for (i in 1:length(x1)){
     for (j in 1:length(x2))
-      {mat[i,j] <- f(x1[i],x2[j])}
+      {mat[i,j] <- f(c(x1[i],x2[j]),type)}
   }
   mat[is.infinite(mat)]<- 2*min(mat[is.finite(mat)])
   
@@ -112,20 +115,84 @@ plot_sharpe<- function(cov,min,max){
         }
     }
   }
+  #w0<- optimal_weight_rb(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf)
   
-  p_max<- list(x1.max=x1[getmax(mat)[1]],x2.max=x2[getmax(mat)[2]])
-  print(p_max)
-  plot3d(p_max[[1]],p_max[[2]],max(mat),col="red",size=5)
+  p_max<- list(max.x1=x1[getmax(mat)[1]],max.x2=x2[getmax(mat)[2]])
+  #pts=list(x1=c(p_max[[1]],w0[1]),x2=c(p_max[[2]],w0[2]),sharpe=c(max(mat),f(w0[1],w0[2])))
+  #points3d(pts$x1,pts$x2,pts$sharpe, size=15,color = c("green","red"),xlab="x1",ylab="x2",zlab="z") 
+  if(type=="sharpe"){
+    print(p_max)
+    points3d(p_max[[1]],p_max[[2]],max(mat), size=15,color ="green")
+  }
   surface3d(x1,x2,mat,col="grey")
+  axes3d()
+  title3d(xlab="x1",ylab="x2",zlab=type)
 }
 
-plot_sharpe(cov,0,8)
+plot_2d(-2,5,"sharpe")
 
 #2-d    x1+x2=1
 y= NULL
+rc=NULL
 for (i in 1:length(x1)){
-   y <- c(y,f(x1[i],1-x1[i]))
+   y <- c(y,f(c(x1[i],1-x1[i])))
+   rc<- c(rc,f(c(x1[i],1-x1[i]),type = "RC1"))
 }
-plot(x1,y,type="l",ylab="sharp ratio")
+plot(x1,y,type="l",xlab="x1",ylab="sharp ratio")
+plot(x1,rc,type="l",xlab="x1",ylab="RC1")
 
+
+################################################### 3D
+cov<- matrix(c( 0.02 , 0.01 , 0.005,
+                0.01 , 0.05 , 0.015,
+                0.005, 0.015, 0.06 ),nrow=3)
+ret<- c(0.1, 0.15, 0.2)
+rf<- 0.01
+#3-d x1+x2+x3=1
+plot_3d<- function(w_min=-2,w_max=2,rw_min=0.2,rw_max=0.8,type="sharpe"){
+  # initial values
+  w0<- rep(1/nrow(cov),nrow(cov))
+  # weight bounds
+  w_lb<- rep(w_min,nrow(cov))
+  w_ub<- rep(w_max,nrow(cov))
+  # risk weight bounds
+  rw_lb<- rep(rw_min,nrow(cov))
+  rw_ub<- rep(rw_max,nrow(cov))
+  
+  x1<- seq(w_lb[1],w_ub[1],length.out = 100)
+  x2<- seq(w_lb[1],w_ub[1],length.out = 100)
+  
+  mat<- matrix(nrow = length(x1),ncol = length(x2))
+  for (i in 1:length(x1)){
+    for (j in 1:length(x2))
+    {mat[i,j] <- f(c(x1[i],x2[j],1-x1[i]-x2[j]),type)}
+  }
+  mat[is.infinite(mat)]<- 2*min(mat[is.finite(mat)])
+  
+  getmax<- function(mat){
+    for (i in 1:length(x1)){
+      for (j in 1:length(x2)){
+        if(mat[i,j]==max(mat)){
+          return(c(i,j))
+        }
+      }
+    }
+  }
+  w0<- optimal_weight_rb(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf)
+  
+  if(type=="sharpe"){
+    p_max<- list(max.x1=x1[getmax(mat)[1]],max.x2=x2[getmax(mat)[2]])
+    print(p_max)
+    pts=list(x1=c(p_max[[1]],w0[1]),x2=c(p_max[[2]],w0[2]),sharpe=c(max(mat),f(w0)))
+    points3d(pts$x1,pts$x2,pts$sharpe, size=15,color = c("green","red")) 
+  }else{
+    surface3d(x1,x2,matrix(rw_min,ncol = length(x1),nrow = length(x2)),col="blue",alpha=0.5)
+    surface3d(x1,x2,matrix(rw_max,ncol = length(x1),nrow = length(x2)),col="purple",alpha=0.5)
+  }
+  surface3d(x1,x2,mat,col="grey")
+  axes3d()
+  title3d(xlab="x1",ylab="x2",zlab=type)
+}
+
+plot_3d(-2,2,0.2,0.8)
 

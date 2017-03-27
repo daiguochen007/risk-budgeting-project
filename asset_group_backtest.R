@@ -3,6 +3,8 @@ library(ggplot2)
 library(ggfortify)
 library(pheatmap)
 library(nloptr)
+library(reshape2)
+library(gridExtra)
 
 ############################################# tool functions
 
@@ -254,18 +256,18 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
   insam_sharpe_ts<- xts(insam_sharpe_ts,order.by = index(all_data)[outsam_index_list[,1]])
   outsam_sharpe_ts<- xts(outsam_sharpe_ts,order.by = index(all_data)[outsam_index_list[,1]])
   sharpe_ts<- cbind(insam_sharpe_ts,avg_insam_sharpe_ts,outsam_sharpe_ts,avg_outsam_sharpe_ts)
-  colnames(sharpe_ts)<- c("insample","insample benchmark","outsample","outsample benchmark")
+  colnames(sharpe_ts)<- c("insample","insample 1/n","outsample","outsample 1/n")
   #time series of insam result
   in_result<- cbind(insam_perf,avg_port)
   in_result<- na.omit(in_result)
   in_result[,2]<- in_result[,2]/as.numeric(in_result[1,2])
-  colnames(in_result)<-c("optimal portfolio","average")
+  colnames(in_result)<-c("optimal portfolio","1/n")
 
   #time series of outsam result
   out_result<- cbind(outsam_perf,avg_port)
   out_result<- na.omit(out_result)
   out_result[,2]<- out_result[,2]/as.numeric(out_result[1,2])
-  colnames(out_result)<-c("optimal portfolio","average")
+  colnames(out_result)<-c("optimal portfolio","1/n")
 
   return(list("weight_ts"=weight_ts,
               "insamRC_ts"=insamRC_ts,
@@ -277,13 +279,41 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
 
 #show back test result: plot&table
 show_result<- function(res, rf_ts){
-  print(autoplot(res$weight_ts,facets = F,main="time series of optimized weights"))
-  print(autoplot(res$insamRC_ts,facets = F,main="time series of insample risk contribution"))
-  print(autoplot(res$outsamRC_ts,facets = F,main="time series of outsample risk contribution"))
-  print(autoplot(res$in_result, facets = F,main="time series of insample overall performance"))
-  print(autoplot(res$out_result, facets = F,main="time series of outsample overall performance"))
-  print(autoplot(res$sharpe[,1:2],facets = F,main="time series of insample sharpe ratio"))
-  print(autoplot(res$sharpe[,3:4],facets = F,main="time series of outsample sharpe ratio"))
+  #weights
+  w_data<- cbind(index(res$weight_ts),as.data.frame(res$weight_ts))
+  colnames(w_data)[1]<-"date"
+  grid.arrange(ggplot(melt(w_data,id="date"),aes(date,value,colour=variable))+geom_line()+ggtitle("time series of optimized weights"),
+                    ggplot(melt(w_data,id="date"),aes(date,value))+geom_area(aes(fill=variable)))
+
+  #risk contribution
+  d1<- cbind(index(res$insamRC_ts),as.data.frame(res$insamRC_ts),rep("insample",nrow(res$insamRC_ts)))
+  colnames(d1)[c(1,ncol(d1))]<-c("date","class")
+  d2<- cbind(index(res$outsamRC_ts),as.data.frame(res$outsamRC_ts),rep("outsample",nrow(res$outsamRC_ts)))
+  colnames(d2)[c(1,ncol(d2))]<-c("date","class")
+  p<-ggplot(melt(rbind(d1,d2),id=c("date","class")), aes(date,value,colour=variable)) + geom_line() + 
+    facet_wrap(~ class,scales = "free",ncol = 1)+ggtitle("time series of risk contributions")
+  print(p)
+  p<-ggplot(melt(rbind(d1,d2),id=c("date","class")), aes(date,value)) + geom_area(aes(fill=variable)) + 
+    facet_wrap(~ class,scales = "free",ncol = 1)+ggtitle("time series of risk contributions (filled)")
+  print(p)
+  
+  #performance
+  d1<- cbind(index(res$in_result),as.data.frame(res$in_result),rep("insample",nrow(res$in_result)))
+  colnames(d1)[c(1,4)]<-c("date","class")
+  d2<- cbind(index(res$out_result),as.data.frame(res$out_result),rep("outsample",nrow(res$out_result)))
+  colnames(d2)[c(1,4)]<-c("date","class")
+  p<-ggplot(melt(rbind(d1,d2),id=c("date","class")), aes(date,value,colour=variable)) + geom_line() + 
+    facet_wrap(~ class,scales = "free",ncol = 1)+ggtitle("time series of performance")
+  print(p)
+  
+  #sharpe ratio ts
+  sr_data<- cbind(index(res$sharpe),as.data.frame(res$sharpe))
+  colnames(sr_data)[1]<- "date"
+  sr_data<- melt(sr_data,id="date")
+  sr_data<-cbind(sr_data,c(rep("insample",nrow(sr_data)/2),rep("outsample",nrow(sr_data)/2)))
+  colnames(sr_data)[3:4]<- c("sharpe","class")
+  p<- ggplot(sr_data,aes(date,sharpe,colour=variable)) + geom_line() + facet_wrap(~ class)+ggtitle("time series of sharpe ratio")
+  print(p)
   
   print("insample perf analysis:")
   print(get_perf(res$in_result,rf_ts))
@@ -311,11 +341,11 @@ all_data<- get_alldata(assets,path)
 ############################################# parameters
 start_date = index(all_data)[1]
 end_date = "2017/3/19"
-insam_length = 90
-outsam_length = 30
+insam_length = 240
+outsam_length = 80
 # weight bounds
-w_lb<- rep(-2,ncol(all_data))
-w_ub<- rep(2,ncol(all_data))
+w_lb<- rep(0,ncol(all_data))
+w_ub<- rep(1,ncol(all_data))
 # risk weight bounds
 rw_lb<- rep(0,ncol(all_data))
 rw_ub<- rep(0.5,ncol(all_data))
@@ -323,5 +353,4 @@ rw_ub<- rep(0.5,ncol(all_data))
 ############################################ run
 res<- rb_back_test(all_data,start_date,end_date,insam_length,outsam_length,w_lb,w_ub,rw_lb,rw_ub,rf_ts)
 show_result(res)
-
 

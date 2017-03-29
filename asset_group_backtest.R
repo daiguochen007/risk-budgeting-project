@@ -6,6 +6,8 @@ library(nloptr)
 library(reshape2)
 library(gridExtra)
 
+#problem: max sharpe time series is not right
+
 ############################################# tool functions
 
 #get data func
@@ -24,8 +26,8 @@ get_alldata<- function(namelist,path){
   return(all_data)
 }
 
-#risk budget optimization func
-optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf){
+#risk budget optimization func (max sharpe with rb constraints)
+optimal_weight_ms_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf){
   rb_c_weight2<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
       eval_f <- function(x) {
         sigma<- sqrt(t(x)%*%cov%*%x)
@@ -94,7 +96,75 @@ optimal_weight_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf){
   ###------------------------------------------------------#
   return(w0)
 }
-#min variance optimization func
+#risk budget optimization func (min variance with rb constraints)
+optimal_weight_mv_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf){
+  rb_c_weight3<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
+    eval_f <- function(x) {
+      return(t(x)%*%cov%*%x)
+    }
+    # Gradient
+    eval_grad_f <- function(x) {
+      return(2*cov%*%x)
+    }
+    # equality constraint function
+    eval_g0 <- function(x) {
+      return(sum(x)-1)
+    }
+    # jacobian of equality constraint
+    eval_jac_g0 <- function(x) {
+      return(rep(1,length(x)))
+    }
+    # inequality constraint function
+    eval_g1 <- function(x) {
+      var<- as.numeric(t(x)%*%cov%*%x)
+      return(c(rw_lb - x*(cov%*%x)/var,x*(cov%*%x)/var - rw_ub))
+    }
+    # jacobian of inequality constraint
+    eval_jac_g1 <- function(x) {
+      #return n*n matrix
+      #x<-w0
+      var<- as.numeric(t(x)%*%cov%*%x)
+      #i= 1~length(x)
+      mat=NULL
+      for (i in 1:length(x)){
+        vec1<- cov[i,]*x[i]
+        vec1[i]<- vec1[i]+(cov%*%x)[i]
+        vec1<- vec1/var
+        vec1<- t(vec1 - 2*x[i]*(cov%*%x)[i]/var^2 * (cov%*%x))
+        mat= rbind(mat,vec1)
+      }
+      return(rbind(-mat,mat))
+    }
+    # solve fortfolio function
+    res <- nloptr( x0=w0,
+                   eval_f=eval_f,
+                   eval_grad_f=eval_grad_f,
+                   eval_g_eq=eval_g0,
+                   eval_jac_g_eq=eval_jac_g0,
+                   eval_g_ineq = eval_g1,
+                   eval_jac_g_ineq = eval_jac_g1,
+                   lb = w_lb,
+                   ub = w_ub,
+                   opts=list("algorithm"="NLOPT_LD_SLSQP","xtol_rel"=1.0e-8))
+    #solution
+    return(res$solution)
+  }
+  ###------------------------------------optimizing module-#
+  w0<- rep(1/nrow(cov),nrow(cov))
+  #start constraint
+  dy_rw_lb<- rep(-1,nrow(cov))
+  dy_rw_ub<- rep(1,nrow(cov))
+  num<- 50
+  for(i in 1:num){
+    dy_rw_lb<- dy_rw_lb + (rw_lb - rep(-1,nrow(cov)))/num
+    dy_rw_ub<- dy_rw_ub + (rw_ub - rep(1,nrow(cov)))/num
+    w0<- rb_c_weight3(cov,w_lb,w_ub,dy_rw_lb,dy_rw_ub,w0,ret,rf)
+    #print(w0)
+  }
+  ###------------------------------------------------------#
+  return(w0)
+}
+#simple min variance optimization func
 optimal_weight_minvar<- function(cov,w_lb,w_ub,ret,target=NULL){
   w0<- rep(1/nrow(cov),nrow(cov))
   
@@ -133,6 +203,39 @@ optimal_weight_minvar<- function(cov,w_lb,w_ub,ret,target=NULL){
   #solution
   return(res$solution)
 }
+#simple max sharpe ratio
+optimal_weight_ms<- function(cov,w_lb,w_ub,ret,rf){
+  w0<- rep(1/nrow(cov),nrow(cov))
+  eval_f <- function(x) {
+    sigma<- sqrt(t(x)%*%cov%*%x)
+    return(-1* (ret%*%x-rf)/sigma) 
+  }
+  # Gradient
+  eval_grad_f <- function(x) {
+    sigma<- sqrt(t(x)%*%cov%*%x)
+    return(-1* (ret/sigma - as.numeric((ret%*%x-rf)/sigma^3) * cov%*%x )) 
+  }
+  # equality constraint function
+  eval_g0 <- function(x) {
+    return(sum(x)-1)
+  }
+  # jacobian of equality constraint
+  eval_jac_g0 <- function(x) {
+    return(rep(1,length(x)))
+  }
+  # solve fortfolio function
+  res <- nloptr( x0=w0,
+                 eval_f=eval_f,
+                 eval_grad_f=eval_grad_f,
+                 eval_g_eq=eval_g0,
+                 eval_jac_g_eq=eval_jac_g0,
+                 lb = w_lb,
+                 ub = w_ub,
+                 opts=list("algorithm"="NLOPT_LD_SLSQP","xtol_rel"=1.0e-8))
+  #solution
+  return(res$solution)
+}
+
 
 # get return from price
 ret_xts<- function(data,log=FALSE){
@@ -216,21 +319,23 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
   cat("start backtesting...\n")
   # core loop
   # serval things we are interested: weights, risk contribution(in/out), performance(in/out), sharpe(i/o), benchmark sharpe(i/o)
-  outsam_perf=NULL
-  insam_perf=NULL
   weight_ts=NULL
   insamRC_ts = NULL
   outsamRC_ts = NULL
+  #sharpe ratio
   insam_sharpe_ts = NULL
   outsam_sharpe_ts = NULL
   avg_insam_sharpe_ts = NULL
   avg_outsam_sharpe_ts = NULL
   mv_insam_sharpe_ts = NULL
   mv_outsam_sharpe_ts = NULL
-  mv_insam_perf = NULL
+  ms_insam_sharpe_ts = NULL
+  ms_outsam_sharpe_ts = NULL  
+  #outsam performance
+  outsam_perf=NULL
   mv_outsam_perf = NULL
-  avg_insam_perf = NULL
-  avg_outsam_perf = NULL  
+  avg_outsam_perf = NULL
+  ms_outsam_perf= NULL
   for (j in 1:nrow(insam_index_list)){
     ############################################# insample data
     #seperate time period
@@ -245,8 +350,9 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     cov<- cov(ret_xts(insam_data,log = T))*252
     
     ###------------------------------------core optimizing module-#
-    w0<- optimal_weight_rb(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf)
-    w1<- optimal_weight_minvar(cov,w_lb,w_ub,ret,target=mv_target)
+    w0<- optimal_weight_ms_rb(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf)           #optimal
+    w1<- optimal_weight_minvar(cov,w_lb,w_ub,ret,target=mv_target)     #min-var
+    w2<- optimal_weight_ms(cov,w_lb,w_ub,ret,rf)                       #max sharpe
     wn<- rep(1/nrow(cov),nrow(cov))
     ###-----------------------------------------------------------#
     
@@ -254,12 +360,11 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     weight_ts<- rbind(weight_ts,w0)
     #insam risk contribution ts
     insamRC_ts<- rbind(insamRC_ts, t(w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)))
-    #insam sharp ratio ts
+    #sharp ratio ts
     insam_sharpe_ts<- c(insam_sharpe_ts,(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0))
-    #mv insam benchmrk sharp ratio ts
     mv_insam_sharpe_ts<- c(mv_insam_sharpe_ts,(ret%*%w1-rf)/sqrt(t(w1)%*%cov%*%w1))
-    #avg insam benchmrk sharp ratio ts
     avg_insam_sharpe_ts<- c(avg_insam_sharpe_ts,(ret%*%wn-rf)/sqrt(t(wn)%*%cov%*%wn))
+    ms_insam_sharpe_ts<- c(ms_insam_sharpe_ts,(ret%*%w2-rf)/sqrt(t(w2)%*%cov%*%w2))
     
     ############################################# outsample data
     #seperate time period
@@ -270,25 +375,28 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     #outsam sharp ratio ts
     rf<- get_rf(index(all_data[outsam_index_list[j,1],]),index(all_data[outsam_index_list[j,2],]))
     ret<- apply(ret_xts(outsam_data,log = T),2,mean)*252
+    
     outsam_sharpe_ts<- c(outsam_sharpe_ts,(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0))
-    #mv outsam benchmrk sharp ratio ts
     mv_outsam_sharpe_ts<- c(mv_outsam_sharpe_ts,(ret%*%w1-rf)/sqrt(t(w1)%*%cov%*%w1))
-    #avg outsam benchmrk sharp ratio ts
     avg_outsam_sharpe_ts<- c(avg_outsam_sharpe_ts,(ret%*%wn-rf)/sqrt(t(wn)%*%cov%*%wn))
+    ms_outsam_sharpe_ts<- c(ms_outsam_sharpe_ts,(ret%*%w2-rf)/sqrt(t(w2)%*%cov%*%w2))
                              
     #outsam portfolio performance
     out_perf<- xts(cumprod(as.matrix(ret_xts(outsam_data))%*%w0+1),order.by = index(outsam_data))
     mv_out_perf<- xts(cumprod(as.matrix(ret_xts(outsam_data))%*%w1+1),order.by = index(outsam_data))
     avg_out_perf<- xts(cumprod(as.matrix(ret_xts(outsam_data))%*%wn+1),order.by = index(outsam_data))
+    ms_out_perf<- xts(cumprod(as.matrix(ret_xts(outsam_data))%*%w2+1),order.by = index(outsam_data))
     
     if (is.null(outsam_perf)){
       outsam_perf = out_perf
       mv_outsam_perf = mv_out_perf
       avg_outsam_perf = avg_out_perf
+      ms_outsam_perf = ms_out_perf
     }else{
       outsam_perf = rbind(outsam_perf, out_perf*as.numeric(outsam_perf[length(outsam_perf)]))
       mv_outsam_perf = rbind(mv_outsam_perf, mv_out_perf*as.numeric(mv_outsam_perf[length(mv_outsam_perf)]))
       avg_outsam_perf = rbind(avg_outsam_perf, avg_out_perf*as.numeric(avg_outsam_perf[length(avg_outsam_perf)]))
+      ms_outsam_perf = rbind(ms_outsam_perf, ms_out_perf*as.numeric(ms_outsam_perf[length(ms_outsam_perf)]))
     }
     cat("=")
   }
@@ -307,13 +415,15 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
   insam_sharpe_ts<- xts(insam_sharpe_ts,order.by = index(all_data)[outsam_index_list[,1]])
   outsam_sharpe_ts<- xts(outsam_sharpe_ts,order.by = index(all_data)[outsam_index_list[,1]])
   
-  sharpe_ts<- cbind(insam_sharpe_ts,avg_insam_sharpe_ts,mv_insam_sharpe_ts,outsam_sharpe_ts,avg_outsam_sharpe_ts,mv_outsam_sharpe_ts)
+  sharpe_ts<- cbind(insam_sharpe_ts,avg_insam_sharpe_ts,mv_insam_sharpe_ts,ms_insam_sharpe_ts,
+                    outsam_sharpe_ts,avg_outsam_sharpe_ts,mv_outsam_sharpe_ts,ms_outsam_sharpe_ts)
   
-  colnames(sharpe_ts)<- c("insample","insample 1/n","insample mv","outsample","outsample 1/n","outsample mv")
+  colnames(sharpe_ts)<- c("insample","insample 1/n","insample mv","insample ms",
+                          "outsample","outsample 1/n","outsample mv","outsample ms")
 
   #time series of outsam result
-  out_result<- cbind(outsam_perf,avg_outsam_perf,mv_outsam_perf)
-  colnames(out_result)<-c("optimal portfolio","1/n","min-var portfolio")
+  out_result<- cbind(outsam_perf,avg_outsam_perf,mv_outsam_perf,ms_outsam_perf)
+  colnames(out_result)<-c("optimal portfolio","1/n","min-var portfolio","max-sharpe portfolio")
 
   return(list("weight_ts"=weight_ts,
               "insamRC_ts"=insamRC_ts,
@@ -343,18 +453,19 @@ show_result<- function(res, rf_ts){
     facet_wrap(~ class,scales = "free",ncol = 1)+ggtitle(paste("time series of risk contributions (filled)",basic))
   print(p)
   
-  #performance
+  #insample performance
   d1<- cbind(data.frame(date=index(res$out_result), coredata(res$out_result)),rep("outsample",nrow(res$out_result)))
-  colnames(d1)<-c("date","optimal portfolio","1/n","min-var portfolio","class")
+  colnames(d1)<-c("date","optimal portfolio","1/n","min-var portfolio","max-sharpe portfolio","class")
   p<-ggplot(melt(d1,id=c("date","class")), aes(date,value,colour=variable)) + geom_line()+ggtitle(paste("time series of performance",basic))
   print(p)
   
   #sharpe ratio ts
   sr_data<- cbind(index(res$sharpe),as.data.frame(res$sharpe))
-  colnames(sr_data)<- c("date","optimal portfolio","1/n portfolio","min-var portfolio","optimal portfolio","1/n portfolio","min-var portfolio")
-  sr_data<- rbind(sr_data[,1:4],sr_data[,c(1,5,6,7)])
+  colnames(sr_data)<- c("date","optimal portfolio","1/n portfolio","min-var portfolio","max-sharpe portfolio",
+                        "optimal portfolio","1/n portfolio","min-var portfolio","max-sharpe portfolio")
+  sr_data<- rbind(sr_data[,1:5],sr_data[,c(1,6,7,8,9)])
   sr_data<-cbind(sr_data,c(rep("insample",nrow(sr_data)/2),rep("outsample",nrow(sr_data)/2)))
-  colnames(sr_data)[5]<- "class"
+  colnames(sr_data)[ncol(sr_data)]<- "class"
   sr_data<- melt(sr_data,id=c("date","class"))
   colnames(sr_data)[4]<- "sharpe"
   p<- ggplot(sr_data,aes(date,sharpe,colour=variable)) + geom_line() + facet_wrap(~ class,ncol=1)+ggtitle(paste("time series of sharpe ratio",basic))
@@ -400,4 +511,7 @@ rw_ub<- rep(0.5,ncol(all_data))
 ############################################ run
 res<- rb_back_test(all_data,start_date,end_date,insam_length,outsam_length,w_lb,w_ub,rw_lb,rw_ub,rf_ts,NULL)
 show_result(res)
+
+
+
 

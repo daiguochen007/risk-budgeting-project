@@ -10,22 +10,7 @@ library(gridExtra)
 
 ############################################# tool functions
 
-#get data func
-get_alldata<- function(namelist,path){
-  all_data<-NULL
-  for (i in 1:length(namelist)){
-    data<- read.csv(paste(path, namelist[i],".csv",sep=""))
-    data<- xts(data[,2:3],order.by=as.Date(data[,1], format="%m/%d/%y"))
-    all_data<- cbind(all_data, data[,2]/as.numeric(data[1,2]))
-  }
-  colnames(all_data)<- namelist
-  all_data<- na.omit(all_data)
-  # for (i in 1:ncol(all_data)){
-  #   all_data[,i]<- all_data[,i]/as.numeric(all_data[1,i])
-  # }
-  return(all_data)
-}
-
+#-----------------get weight func 
 #risk budget optimization func (max sharpe with rb constraints)
 optimal_weight_ms_rb<- function(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf){
   rb_c_weight2<- function(cov,w_lb,w_ub,rw_lb,rw_ub,w0,ret,rf){
@@ -235,7 +220,88 @@ optimal_weight_ms<- function(cov,w_lb,w_ub,ret,rf){
   #solution
   return(res$solution)
 }
+#optimal weight rp
+opt_weight_rp2<- function(cov,w_lb,w_ub,adjust=F){
+  opt_weight_rp<- function(cov,w_lb,w_ub){
+    rb_weight2<- function(cov,rho,w_lb,w_ub,w0){
+      #risk parity/b can be adjusted to risk weights
+      b<- rep(1/nrow(cov),nrow(cov))
+      eval_f <- function(x) {
+        return(sum((x*(cov%*%x) - as.numeric(t(x)%*%cov%*%x)*b)^2) + rho*t(x)%*%cov%*%x)
+      }
+      # Gradient
+      eval_grad_f <- function(x) {
+        e<- diag(length(x))
+        res<-0
+        temp<- x*(cov%*%x) - as.numeric(t(x)%*%cov%*%x)*b
+        for (i in 1:length(x)){
+          res<- res+2*temp[i]*(e[i,]%*%t(cov[i,])+t(e[i,]%*%t(cov[i,])))%*%x
+        }
+        return(res + rho*2*cov%*%x)
+      }
+      # equality constraint function
+      eval_g0 <- function(x) {
+        return(sum(x)-1)
+      }
+      # jacobian of equality constraint
+      eval_jac_g0 <- function(x) {
+        return(rep(1,length(x)))
+      }
+      # solve fortfolio function
+      res <- nloptr( x0=w0,
+                     eval_f=eval_f,
+                     eval_grad_f=eval_grad_f,
+                     eval_g_eq=eval_g0,
+                     eval_jac_g_eq=eval_jac_g0,
+                     lb = w_lb,
+                     ub = w_ub,
+                     opts=list("algorithm"="NLOPT_LD_SLSQP","xtol_rel"=1.0e-8))
+      #solution
+      return(res$solution)
+    }
+    w0<- rep(1/nrow(cov),nrow(cov))
+    rho<-100
+    beta<-0.6
+    while (rho >= 10^-6){
+      rho<- rho*beta
+      w0<- rb_weight2(cov,rho,w_lb,w_ub,w0)
+      #print(w0)
+    }
+    return (w0)
+  }
+  w0<- opt_weight_rp(cov,w_lb,w_ub)
+  if (adjust==F){return(w0)}
+  
+  b<- rep(1/nrow(cov),nrow(cov))
+  #evaluate deviation 2% allowed
+  dev = sum(((w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)/b)-1)^2)
+  benchmk = sum(rep(0.05,nrow(cov))^2)
+  while(dev > benchmk && w_ub[1]<3){ # step wider to capture best rp solution
+    w_lb<- w_lb-1
+    w_ub<- w_ub+1
+    w0<- opt_weight_rp(cov,w_lb,w_ub)
+    dev = sum(((w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)/b)-1)^2)
+  }
+  cat(w_lb[1])
+  cat(w_ub[1])
+  return(w0)
+}
 
+#get data func
+get_alldata<- function(namelist,path){
+  all_data<-NULL
+  for (i in 1:length(namelist)){
+    data<- read.csv(paste(path, namelist[i],".csv",sep=""))
+    data<- xts(data[,2:3],order.by=as.Date(data[,1], format="%m/%d/%y"))
+    all_data<- cbind(all_data, data[,2]/as.numeric(data[1,2]))
+  }
+  colnames(all_data)<- namelist
+  all_data<- na.omit(all_data)
+  # for (i in 1:ncol(all_data)){
+  #   all_data[,i]<- all_data[,i]/as.numeric(all_data[1,i])
+  # }
+  return(all_data)
+}
 
 # get return from price
 ret_xts<- function(data,log=FALSE){
@@ -344,18 +410,24 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     rf<- get_rf(index(all_data[insam_index_list[j,1],]),index(all_data[insam_index_list[j,2],]))
     #geo insam ret
     #ret<- ((as.vector(insam_data[nrow(insam_data),])/as.vector(insam_data[1,]))^(1/nrow(insam_data))-1)*252
-    # log ret
-    ret<- apply(ret_xts(insam_data,log = T),2,mean)*252
+    # log ret / simple ret
+    ret<- apply(ret_xts(insam_data),2,mean)*252 # log =T
     
-    cov<- cov(ret_xts(insam_data,log = T))*252
+    cov<- cov(ret_xts(insam_data))*252  # log = T
     
     ###------------------------------------core optimizing module-#
     w0<- optimal_weight_ms_rb(cov,w_lb,w_ub,rw_lb,rw_ub,ret,rf)           #optimal
+    #w0<- opt_weight_rp2(cov,w_lb,w_ub,adjust = T)
+    #w0<- rep(1/nrow(cov),nrow(cov))
     w1<- optimal_weight_minvar(cov,w_lb,w_ub,ret,target=mv_target)     #min-var
-    w2<- optimal_weight_ms(cov,w_lb,w_ub,ret,rf)                       #max sharpe
+    w2<- optimal_weight_ms(cov,w_lb,w_ub,ret,rf)                       #max-sharpe
     wn<- rep(1/nrow(cov),nrow(cov))
     ###-----------------------------------------------------------#
-    
+    #if problem with w0,replace
+    #if(sum(w0)>1.1||sum(w0)<0.9){
+    #  w0<- rep(1/nrow(cov),nrow(cov))
+    #}
+
     #weight time series
     weight_ts<- rbind(weight_ts,w0)
     #insam risk contribution ts
@@ -370,11 +442,11 @@ rb_back_test<- function(all_data,start_date,end_date,insam_length,outsam_length,
     #seperate time period
     outsam_data<- all_data[outsam_index_list[j,1]:outsam_index_list[j,2],]
     #outsam risk contribution ts
-    cov<- cov(ret_xts(outsam_data,log = T))*252 
+    cov<- cov(ret_xts(outsam_data))*252  #log = T
     outsamRC_ts<- rbind(outsamRC_ts, t(w0*(cov%*%w0)/as.numeric(t(w0)%*%cov%*%w0)))
     #outsam sharp ratio ts
     rf<- get_rf(index(all_data[outsam_index_list[j,1],]),index(all_data[outsam_index_list[j,2],]))
-    ret<- apply(ret_xts(outsam_data,log = T),2,mean)*252
+    ret<- apply(ret_xts(outsam_data),2,mean)*252  # log = T
     
     outsam_sharpe_ts<- c(outsam_sharpe_ts,(ret%*%w0-rf)/sqrt(t(w0)%*%cov%*%w0))
     mv_outsam_sharpe_ts<- c(mv_outsam_sharpe_ts,(ret%*%w1-rf)/sqrt(t(w1)%*%cov%*%w1))
@@ -499,8 +571,8 @@ all_data<- get_alldata(assets,path)
 ############################################# parameters
 start_date = index(all_data)[1]
 end_date = "2017/3/19"
-insam_length = 90
-outsam_length = 30
+insam_length = 180
+outsam_length = 60
 # weight bounds
 w_lb<- rep(0,ncol(all_data))
 w_ub<- rep(1,ncol(all_data))
@@ -511,7 +583,4 @@ rw_ub<- rep(0.5,ncol(all_data))
 ############################################ run
 res<- rb_back_test(all_data,start_date,end_date,insam_length,outsam_length,w_lb,w_ub,rw_lb,rw_ub,rf_ts,NULL)
 show_result(res)
-
-
-
 

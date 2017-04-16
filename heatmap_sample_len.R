@@ -1,12 +1,13 @@
 library(pheatmap)
 library(rgl)
 
-mlist<- seq(60,300,30)
-nlist<- seq(10,180,20)
+mlist<- seq(12,144,24)
+nlist<- mlist/3
 mat1<- matrix(NA,ncol=length(mlist),nrow=length(nlist),dimnames=list(nlist,mlist))
 mat2<- matrix(NA,ncol=length(mlist),nrow=length(nlist),dimnames=list(nlist,mlist))
 mat3<- matrix(NA,ncol=length(mlist),nrow=length(nlist),dimnames=list(nlist,mlist))
 mat4<- matrix(NA,ncol=length(mlist),nrow=length(nlist),dimnames=list(nlist,mlist)) 
+mat5<- matrix(NA,ncol=length(mlist),nrow=length(nlist),dimnames=list(nlist,mlist)) 
   
 for (m in 1:length(mlist)){
   for (n in 1:length(nlist)){
@@ -19,36 +20,40 @@ for (m in 1:length(mlist)){
       mat2[n,m]<- get_perf(res$out_result[,2])[3] #1/n
       mat3[n,m]<- get_perf(res$out_result[,3])[3] #min-var 
       mat4[n,m]<- get_perf(res$out_result[,4])[3] #max sharpe
+      mat5[n,m]<- get_perf(res$out_result[,5])[3] #risk parity
     }
   }
 }
 
-bks<- NULL
+bks<- seq(0.1,3.7,0.04)
 pheatmap(mat1,cluster_rows = F,cluster_cols = F, breaks = bks,main="optimal sharpe")
 pheatmap(mat2,cluster_rows = F,cluster_cols = F,breaks = bks,main="1/n sharpe")
 pheatmap(mat3,cluster_rows = F,cluster_cols = F,breaks = bks,main="min-var sharpe")
 pheatmap(mat4,cluster_rows = F,cluster_cols = F,breaks = bks,main="max sharpe sharpe")
-
+pheatmap(mat5,cluster_rows = F,cluster_cols = F,breaks = bks,main="risk parity sharpe")
 
 persp3d(nlist,mlist,mat1,col="lightblue",main="optimal sharpe")
 #surface3d(nlist,mlist,mat4,col="red")
 persp3d(nlist,mlist,mat2,col="lightblue",main="1/n sharpe")
 persp3d(nlist,mlist,mat3,col="lightblue",main="min-var sharpe")
 persp3d(nlist,mlist,mat4,col="lightblue",main="max sharpe sharpe")
+persp3d(nlist,mlist,mat5,col="lightblue",main="risk-parity sharpe")
 
 # evaluate the sharpe matrix
-eva<- matrix(NA,ncol = 4,nrow=2)
-colnames(eva)<- c("optimal sharpe","1/n sharpe","min-var sharpe","max sharpe sharpe")
+eva<- matrix(NA,ncol = 5,nrow=2)
+colnames(eva)<- c("optimal sharpe","1/n sharpe","min-var sharpe","max sharpe sharpe","risk parity sharpe")
 rownames(eva)<- c("mean","std")
 
 eva[1,1]<- mean(na.omit(as.vector(mat1)))
 eva[1,2]<- mean(na.omit(as.vector(mat2)))
 eva[1,3]<- mean(na.omit(as.vector(mat3)))
 eva[1,4]<- mean(na.omit(as.vector(mat4)))
+eva[1,5]<- mean(na.omit(as.vector(mat5)))
 eva[2,1]<- sd(na.omit(as.vector(mat1)))
 eva[2,2]<- sd(na.omit(as.vector(mat2)))
 eva[2,3]<- sd(na.omit(as.vector(mat3)))
 eva[2,4]<- sd(na.omit(as.vector(mat4)))
+eva[2,5]<- sd(na.omit(as.vector(mat5)))
 
 
 
